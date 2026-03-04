@@ -25,17 +25,12 @@ export interface Conversation {
 }
 
 export interface MemoryItem {
-  id: string;
-  user_id: string;
+  id: number;
+  person_id: string;
   text: string;
-  tags: string[];
-  created_at: number;
-  updated_at: number;
-  metadata: Record<string, unknown>;
 }
 
 export interface MemorySearchHit {
   memory: MemoryItem;
   score: number;
 }
-

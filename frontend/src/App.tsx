@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   addMemory,
-  deleteMemory,
   fetchHealth,
+  findSimilarMemory,
   fetchModels,
   fetchPromptScenes,
   listMemories,
   searchMemories,
   sendChatCompletion,
+  updateMemory,
 } from "./api";
 import type { Conversation, MemoryItem, MemorySearchHit } from "./types";
 
@@ -36,13 +37,6 @@ function createConversation(model: string, userId: string, scene: string, system
   };
 }
 
-function parseTags(input: string): string[] {
-  return input
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
-
 export default function App() {
   const [health, setHealth] = useState("unknown");
   const [models, setModels] = useState<string[]>([]);
@@ -68,9 +62,11 @@ export default function App() {
 
   const [memories, setMemories] = useState<MemoryItem[]>([]);
   const [memoryText, setMemoryText] = useState("");
-  const [memoryTags, setMemoryTags] = useState("");
+  const [memoryUpdateId, setMemoryUpdateId] = useState("");
+  const [memoryUpdateText, setMemoryUpdateText] = useState("");
   const [memoryQuery, setMemoryQuery] = useState("");
   const [memoryHits, setMemoryHits] = useState<MemorySearchHit[]>([]);
+  const [similarMemory, setSimilarMemory] = useState<MemoryItem | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConversationId),
@@ -234,14 +230,17 @@ export default function App() {
 
   async function onAddMemory() {
     if (!memoryText.trim()) return;
-    await addMemory(userId, memoryText.trim(), parseTags(memoryTags));
+    await addMemory(userId, memoryText.trim());
     setMemoryText("");
-    setMemoryTags("");
     await refreshMemories();
   }
 
-  async function onDeleteMemory(memoryId: string) {
-    await deleteMemory(memoryId);
+  async function onUpdateMemory() {
+    const memoryId = Number(memoryUpdateId);
+    if (!Number.isFinite(memoryId) || memoryId <= 0 || !memoryUpdateText.trim()) return;
+    await updateMemory(memoryId, userId, memoryUpdateText.trim());
+    setMemoryUpdateId("");
+    setMemoryUpdateText("");
     await refreshMemories();
   }
 
@@ -254,10 +253,22 @@ export default function App() {
     setMemoryHits(hits);
   }
 
+  async function onFindSimilar() {
+    if (!memoryQuery.trim()) {
+      setSimilarMemory(null);
+      return;
+    }
+    const item = await findSimilarMemory(userId, memoryQuery.trim());
+    setSimilarMemory(item);
+  }
+
   const lastAssistantTrace =
     activeConversation?.messages
       .filter((m) => m.role === "assistant")
       .slice(-1)[0]?.trace ?? null;
+  const lastRetrievedMemories = Array.isArray(lastAssistantTrace?.retrieved_memories)
+    ? (lastAssistantTrace.retrieved_memories as Array<{ id?: number; text?: string; score?: number }>)
+    : [];
 
   return (
     <div className="app-shell">
@@ -360,19 +371,28 @@ export default function App() {
 
       <aside className="right-panel">
         <section className="panel-card">
-          <h3>Memory</h3>
+          <h3>PAHF Memory</h3>
           <div className="memory-form">
             <textarea
               value={memoryText}
               onChange={(e) => setMemoryText(e.target.value)}
               placeholder="Add memory text..."
             />
-            <input
-              value={memoryTags}
-              onChange={(e) => setMemoryTags(e.target.value)}
-              placeholder="tags,comma,separated"
-            />
             <button onClick={() => void onAddMemory()}>Add Memory</button>
+          </div>
+
+          <div className="memory-form">
+            <input
+              value={memoryUpdateId}
+              onChange={(e) => setMemoryUpdateId(e.target.value)}
+              placeholder="Memory ID to update"
+            />
+            <textarea
+              value={memoryUpdateText}
+              onChange={(e) => setMemoryUpdateText(e.target.value)}
+              placeholder="Updated memory text..."
+            />
+            <button onClick={() => void onUpdateMemory()}>Update Memory</button>
           </div>
 
           <div className="memory-search">
@@ -382,6 +402,7 @@ export default function App() {
               placeholder="Search memory..."
             />
             <button onClick={() => void onSearchMemory()}>Search</button>
+            <button onClick={() => void onFindSimilar()}>Find Similar</button>
           </div>
 
           {memoryHits.length > 0 ? (
@@ -396,15 +417,34 @@ export default function App() {
             </div>
           ) : null}
 
+          {similarMemory ? (
+            <div className="memory-hits">
+              <h4>Most Similar</h4>
+              <div className="memory-item">
+                <small>id={similarMemory.id}</small>
+                <p>{similarMemory.text}</p>
+              </div>
+            </div>
+          ) : null}
+
+          {lastRetrievedMemories.length > 0 ? (
+            <div className="memory-hits">
+              <h4>Retrieved (Last Reply)</h4>
+              {lastRetrievedMemories.map((item, idx) => (
+                <div key={`${item.id ?? idx}`} className="memory-item">
+                  <small>id={item.id ?? "n/a"} score={typeof item.score === "number" ? item.score.toFixed(3) : "n/a"}</small>
+                  <p>{item.text ?? ""}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="memory-list">
             <h4>Stored Memories</h4>
             {memories.map((item) => (
               <div key={item.id} className="memory-item">
+                <small>id={item.id}</small>
                 <p>{item.text}</p>
-                <div className="memory-tags">{item.tags.join(", ")}</div>
-                <button className="danger-link" onClick={() => void onDeleteMemory(item.id)}>
-                  Delete
-                </button>
               </div>
             ))}
             {memories.length === 0 ? <p className="muted">No memories yet.</p> : null}
@@ -423,4 +463,3 @@ export default function App() {
     </div>
   );
 }
-

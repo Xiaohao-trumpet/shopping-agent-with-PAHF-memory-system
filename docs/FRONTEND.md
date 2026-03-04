@@ -18,7 +18,7 @@
   - Main UI state and layout:
     - conversation sidebar
     - chat stream and composer
-    - memory panel
+    - PAHF memory panel
     - trace drawer
 - `src/api.ts`
   - HTTP client functions for backend endpoints
@@ -39,7 +39,7 @@
    - Render response content into current conversation
    - Save trace metadata for tools/trace drawer
 4. Memory actions:
-   - list/add/delete/search via `/api/v1/memory*`
+   - list/add/update/search/find-similar via `/api/v1/memory*`
 
 ## Persistence
 
@@ -59,4 +59,3 @@ No server-side auth/session dependency is required for frontend state.
 - Add richer trace renderer for tool calls with typed payloads.
 - Add optimistic updates and retry controls for network failures.
 - Split App into components as UI grows (ConversationList, MessageList, MemoryPanel).
-

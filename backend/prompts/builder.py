@@ -22,7 +22,7 @@ class PromptBuilder:
         self,
         scene: str,
         user_message: str,
-        short_context_text: str = "",
+        pahf_context_text: str = "",
         retrieved_memories: Optional[List[Dict[str, Any]]] = None,
         available_tools: Optional[Dict[str, Dict[str, str]]] = None,
         planner_output: Optional[Dict[str, Any]] = None,
@@ -46,13 +46,13 @@ class PromptBuilder:
             "",
         ]
 
-        if short_context_text:
-            sections.extend(["### Short-Term Context", short_context_text, ""])
+        if pahf_context_text:
+            sections.extend(["### PAHF Memory Context", pahf_context_text, ""])
 
         if retrieved_memories:
             sections.extend(
                 [
-                    "### Retrieved Long-Term Memories",
+                    "### Retrieved PAHF Memories",
                     self._to_json_block(retrieved_memories),
                     "",
                 ]
@@ -96,4 +96,3 @@ class PromptBuilder:
         )
 
         return "\n".join(sections).strip()
-

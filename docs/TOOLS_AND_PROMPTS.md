@@ -4,7 +4,7 @@
 
 Phase 3 adds a local-first tool layer and a programmable prompt builder:
 
-`memory_retrieve -> planner -> tool_execute -> final_response -> memory_write`
+`memory_retrieval_node -> assistant_generation_node -> memory_extraction_node -> memory_update_node`
 
 Core modules:
 
@@ -110,15 +110,18 @@ Execution trace (response `trace` field):
 - `tool_results`
 - `tool_errors`
 - `retrieved_memories`
-- `auto_memory`
+- `pahf_context_text`
+- `clarification_question`
+- `memory_candidate`
+- `memory_update`
 
 ## Dynamic Prompt Assembly
 
 Prompt builder (`backend/prompts/builder.py`) composes:
 
 - scene-specific base system prompt
-- short-term memory context
-- retrieved long-term memories
+- PAHF memory context
+- retrieved PAHF memories
 - available tool metadata
 - planner output
 - tool execution results
@@ -161,4 +164,3 @@ python run_backend.py
 - `No KB hits`: verify `KB_FILE_PATH` exists and has JSON array records.
 - `Ticket tool returns not found`: verify `ticket_id` format and `TICKET_DB_PATH`.
 - OpenWebUI stream mode: backend currently emits a single chunk then `[DONE]` (non-token streaming behavior).
-

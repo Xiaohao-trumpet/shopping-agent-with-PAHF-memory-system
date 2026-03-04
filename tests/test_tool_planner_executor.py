@@ -2,7 +2,7 @@
 
 from pathlib import Path
 import shutil
-import uuid
+import tempfile
 import json
 
 from backend.tools import (
@@ -16,11 +16,7 @@ from backend.tools import (
 
 
 def _make_tmp_dir() -> Path:
-    base = (Path.cwd() / ".pytest_tmp").resolve()
-    base.mkdir(parents=True, exist_ok=True)
-    target = base / f"planner_executor_{uuid.uuid4().hex}"
-    target.mkdir(parents=True, exist_ok=True)
-    return target
+    return Path(tempfile.mkdtemp(prefix="planner_executor_"))
 
 
 def test_planner_executor_creates_ticket_for_support_intent():
@@ -59,4 +55,3 @@ def test_planner_executor_creates_ticket_for_support_intent():
         assert results[0].output["ticket_id"].startswith("T")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-

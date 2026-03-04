@@ -64,35 +64,18 @@ class AppConfig:
     # CORS settings
     CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "*").split(",")
 
-    # Memory system switches
-    MEMORY_ENABLED: bool = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
-    LONG_TERM_MEMORY_ENABLED: bool = os.getenv("LONG_TERM_MEMORY_ENABLED", "true").lower() == "true"
-    MEMORY_WRITE_ENABLED: bool = os.getenv("MEMORY_WRITE_ENABLED", "true").lower() == "true"
-
-    # Short-term memory policy
-    SHORT_TERM_WINDOW_TURNS: int = int(os.getenv("SHORT_TERM_WINDOW_TURNS", "6"))
-    SHORT_TERM_ENABLE_SUMMARY: bool = os.getenv("SHORT_TERM_ENABLE_SUMMARY", "true").lower() == "true"
-    SHORT_TERM_SUMMARY_TRIGGER_TURNS: int = int(os.getenv("SHORT_TERM_SUMMARY_TRIGGER_TURNS", "10"))
-    SHORT_TERM_SUMMARY_MAX_CHARS: int = int(os.getenv("SHORT_TERM_SUMMARY_MAX_CHARS", "800"))
-
-    # Long-term memory persistence and search
-    MEMORY_PERSIST_DIR: str = os.getenv("MEMORY_PERSIST_DIR", "./data/memory")
-    MEMORY_VECTOR_BACKEND: str = os.getenv("MEMORY_VECTOR_BACKEND", "chroma")
-    MEMORY_COLLECTION_NAME: str = os.getenv("MEMORY_COLLECTION_NAME", "user_memories")
-    MEMORY_SEARCH_TOP_K: int = int(os.getenv("MEMORY_SEARCH_TOP_K", "3"))
-
-    # Embedding settings
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-v4")
-    EMBEDDING_DIMENSION: int = int(os.getenv("EMBEDDING_DIMENSION", "256"))
-    EMBEDDING_USE_REMOTE: bool = os.getenv("EMBEDDING_USE_REMOTE", "true").lower() == "true"
-    EMBEDDING_BASE_URL: str = os.getenv(
-        "EMBEDDING_BASE_URL",
-        os.getenv("BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    )
-    EMBEDDING_API_KEY: str = os.getenv(
-        "EMBEDDING_API_KEY",
-        os.getenv("DASHSCOPE_API_KEY", os.getenv("API_KEY", "")),
-    )
+    # PAHF memory settings (single memory architecture)
+    PAHF_BACKEND: str = os.getenv("PAHF_BACKEND", "sqlite")
+    PAHF_SQLITE_DB_PATH: str = os.getenv("PAHF_SQLITE_DB_PATH", "./data/pahf/pahf_memory.db")
+    PAHF_FAISS_PATH: str = os.getenv("PAHF_FAISS_PATH", "./data/pahf/pahf_memory")
+    PAHF_TOP_K: int = int(os.getenv("PAHF_TOP_K", "5"))
+    PAHF_SIMILARITY_THRESHOLD: str = os.getenv("PAHF_SIMILARITY_THRESHOLD", "0.45")
+    PAHF_QUERY_ENCODER: str = os.getenv("PAHF_QUERY_ENCODER", "facebook/dragon-plus-query-encoder")
+    PAHF_CONTEXT_ENCODER: str = os.getenv("PAHF_CONTEXT_ENCODER", "facebook/dragon-plus-context-encoder")
+    PAHF_EMBED_DEVICE: str = os.getenv("PAHF_EMBED_DEVICE", "")
+    PAHF_ENABLE_PRE_CLARIFICATION: bool = os.getenv("PAHF_ENABLE_PRE_CLARIFICATION", "true").lower() == "true"
+    PAHF_ENABLE_POST_CORRECTION: bool = os.getenv("PAHF_ENABLE_POST_CORRECTION", "true").lower() == "true"
+    PAHF_LLM_MODEL: str = os.getenv("PAHF_LLM_MODEL", "")
 
     # Phase 3 tool calling
     TOOLS_ENABLED: bool = os.getenv("TOOLS_ENABLED", "true").lower() == "true"

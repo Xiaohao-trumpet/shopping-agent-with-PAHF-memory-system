@@ -3,17 +3,13 @@
 from pathlib import Path
 import json
 import shutil
-import uuid
+import tempfile
 
 from backend.tools import ToolRegistry, FAQStore, TicketStore, register_builtin_tools
 
 
 def _make_tmp_dir() -> Path:
-    base = (Path.cwd() / ".pytest_tmp").resolve()
-    base.mkdir(parents=True, exist_ok=True)
-    target = base / f"tools_builtin_{uuid.uuid4().hex}"
-    target.mkdir(parents=True, exist_ok=True)
-    return target
+    return Path(tempfile.mkdtemp(prefix="tools_builtin_"))
 
 
 def test_builtin_ticket_tools_create_get_list():
@@ -83,4 +79,3 @@ def test_builtin_kb_search_returns_refund_hit():
         assert result["hits"][0]["id"] == "refund_policy"
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-

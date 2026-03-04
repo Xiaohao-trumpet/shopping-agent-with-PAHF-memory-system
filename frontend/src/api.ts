@@ -82,20 +82,27 @@ export async function listMemories(userId: string): Promise<MemoryItem[]> {
   return request(`/api/v1/memory?user_id=${encodeURIComponent(userId)}`);
 }
 
-export async function addMemory(userId: string, text: string, tags: string[]): Promise<MemoryItem> {
+export async function addMemory(userId: string, text: string): Promise<MemoryItem> {
   return request("/api/v1/memory", {
     method: "POST",
     body: JSON.stringify({
       user_id: userId,
       text,
-      tags: tags.length ? tags : undefined,
     }),
   });
 }
 
-export async function deleteMemory(memoryId: string): Promise<void> {
-  await request(`/api/v1/memory/${encodeURIComponent(memoryId)}`, {
-    method: "DELETE",
+export async function updateMemory(
+  memoryId: number,
+  userId: string,
+  text: string
+): Promise<MemoryItem> {
+  return request(`/api/v1/memory/${encodeURIComponent(String(memoryId))}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      user_id: userId,
+      text,
+    }),
   });
 }
 
@@ -115,3 +122,17 @@ export async function searchMemories(
   return res.hits ?? [];
 }
 
+export async function findSimilarMemory(
+  userId: string,
+  text: string,
+  threshold?: number
+): Promise<MemoryItem | null> {
+  return request<MemoryItem | null>("/api/v1/memory/find-similar", {
+    method: "POST",
+    body: JSON.stringify({
+      user_id: userId,
+      text,
+      threshold,
+    }),
+  });
+}

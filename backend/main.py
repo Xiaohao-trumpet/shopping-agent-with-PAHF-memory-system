@@ -19,7 +19,7 @@ from .config import get_model_config, get_app_config
 from .models.universal_chat import UniversalChat
 from .agents.graph import create_chat_graph
 from .session_store import get_session_store
-from .memory import build_memory_service, ShortTermMemoryManager
+from .pahf_memory import build_pahf_memory_service
 from .prompts.prompt_factory import get_prompt_factory
 from .prompts.builder import PromptBuilder
 from .tools import (
@@ -49,8 +49,7 @@ logger = get_logger(__name__)
 model_client: Optional[UniversalChat] = None
 chat_graph = None
 session_store = None
-memory_service = None
-short_term_memory = None
+pahf_memory_service = None
 tool_registry = None
 tool_planner = None
 tool_executor = None
@@ -60,7 +59,7 @@ prompt_builder = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global model_client, chat_graph, session_store, memory_service, short_term_memory
+    global model_client, chat_graph, session_store, pahf_memory_service
     global tool_registry, tool_planner, tool_executor, prompt_builder
     
     logger.info("Starting application...")
@@ -84,15 +83,12 @@ async def lifespan(app: FastAPI):
     session_store = get_session_store(ttl_seconds=app_config.SESSION_TTL_SECONDS)
     logger.info("Initialized session store")
 
-    # Initialize memory services
-    short_term_memory = ShortTermMemoryManager(
-        window_turns=app_config.SHORT_TERM_WINDOW_TURNS,
-        enable_summary=app_config.SHORT_TERM_ENABLE_SUMMARY,
-        summary_trigger_turns=app_config.SHORT_TERM_SUMMARY_TRIGGER_TURNS,
-        summary_max_chars=app_config.SHORT_TERM_SUMMARY_MAX_CHARS,
+    # Initialize PAHF memory service
+    pahf_memory_service = build_pahf_memory_service(
+        app_config=app_config,
+        model_config=model_config,
     )
-    memory_service = build_memory_service(app_config=app_config, model_config=model_config)
-    logger.info("Initialized memory services")
+    logger.info("Initialized PAHF memory service")
 
     # Initialize tool subsystem
     faq_store = FAQStore(kb_path=app_config.KB_FILE_PATH)
@@ -113,24 +109,22 @@ async def lifespan(app: FastAPI):
     prompt_builder = PromptBuilder(prompt_factory=prompt_factory)
     logger.info("Initialized tool subsystem")
 
-    # Initialize chat graph with memory hooks
+    # Initialize chat graph with PAHF memory hooks
     chat_graph = create_chat_graph(
         model_client=model_client,
-        short_term_manager=short_term_memory,
-        memory_service=memory_service if app_config.LONG_TERM_MEMORY_ENABLED else None,
+        pahf_memory_service=pahf_memory_service,
         tool_planner=tool_planner,
         tool_executor=tool_executor,
         tool_registry=tool_registry,
         prompt_builder=prompt_builder,
         prompt_scene=model_config.system_prompt_scene,
-        memory_enabled=app_config.MEMORY_ENABLED,
-        memory_write_enabled=app_config.MEMORY_WRITE_ENABLED,
-        memory_top_k=app_config.MEMORY_SEARCH_TOP_K,
         tools_enabled=app_config.TOOLS_ENABLED,
     )
     logger.info("Initialized chat graph")
     
     yield
+    if pahf_memory_service is not None:
+        pahf_memory_service.close()
     
     logger.info("Shutting down application...")
 
@@ -237,30 +231,23 @@ class OpenAIChatCompletionRequest(BaseModel):
 
 
 class MemoryCreateRequest(BaseModel):
-    user_id: str = Field(..., description="Owner user id")
+    user_id: str = Field(..., description="Mapped to PAHF person_id")
     text: str = Field(..., min_length=1, description="Memory content")
-    tags: Optional[list[str]] = Field(default=None, description="Optional tags")
-    metadata: Optional[dict] = Field(default=None, description="Arbitrary metadata")
 
 
 class MemoryUpdateRequest(BaseModel):
-    text: Optional[str] = Field(default=None, min_length=1, description="Updated memory content")
-    tags: Optional[list[str]] = Field(default=None, description="Updated tags")
-    metadata: Optional[dict] = Field(default=None, description="Updated metadata")
+    user_id: str = Field(..., description="Mapped to PAHF person_id")
+    text: str = Field(..., min_length=1, description="Updated memory content")
 
 
 class MemoryResponse(BaseModel):
-    id: str
-    user_id: str
+    id: int
+    person_id: str
     text: str
-    tags: list[str]
-    created_at: float
-    updated_at: float
-    metadata: dict
 
 
 class MemorySearchRequest(BaseModel):
-    user_id: str = Field(..., description="Owner user id")
+    user_id: str = Field(..., description="Mapped to PAHF person_id")
     query: str = Field(..., min_length=1, description="Semantic query")
     top_k: Optional[int] = Field(default=None, ge=1, le=20, description="Max results")
 
@@ -272,6 +259,15 @@ class MemorySearchHit(BaseModel):
 
 class MemorySearchResponse(BaseModel):
     hits: list[MemorySearchHit]
+
+
+class MemoryFindSimilarRequest(BaseModel):
+    user_id: str = Field(..., description="Mapped to PAHF person_id")
+    text: str = Field(..., min_length=1, description="Candidate memory text")
+    threshold: Optional[float] = Field(
+        default=None,
+        description="Optional similarity threshold override",
+    )
 
 
 def _extract_text_content(content: Any) -> str:
@@ -469,12 +465,14 @@ async def chat(request: ChatRequest):
         response_text = result.get("response", "")
         trace_payload = {
             "retrieved_memories": result.get("retrieved_memories", []),
-            "auto_memory": result.get("auto_memory"),
+            "pahf_context_text": result.get("pahf_context_text", ""),
+            "clarification_question": result.get("clarification_question"),
+            "memory_candidate": result.get("memory_candidate"),
+            "memory_update": result.get("memory_update"),
             "intent": result.get("intent"),
             "tool_plan": result.get("tool_plan", []),
             "tool_results": result.get("tool_results", []),
             "tool_errors": result.get("tool_errors", []),
-            "tools": result.get("tools_used", []),
         }
         
         # Calculate latency
@@ -529,81 +527,63 @@ async def chat_stream(request: ChatRequest):
 
 def _memory_to_response(item) -> MemoryResponse:
     return MemoryResponse(
-        id=item.id,
-        user_id=item.user_id,
+        id=int(item.id),
+        person_id=item.person_id,
         text=item.text,
-        tags=item.tags,
-        created_at=item.created_at,
-        updated_at=item.updated_at,
-        metadata=item.metadata,
     )
 
 
 @app.post("/api/v1/memory", response_model=MemoryResponse)
 async def add_memory(request: MemoryCreateRequest):
-    if memory_service is None:
+    if pahf_memory_service is None:
         raise HTTPException(status_code=503, detail="Memory service unavailable")
-    item = memory_service.add_memory(
-        user_id=request.user_id,
+    item = pahf_memory_service.add_memory(
+        person_id=request.user_id,
         text=request.text,
-        tags=request.tags,
-        metadata=request.metadata,
     )
     return _memory_to_response(item)
 
 
 @app.get("/api/v1/memory", response_model=list[MemoryResponse])
 async def list_memory(user_id: str):
-    if memory_service is None:
+    if pahf_memory_service is None:
         raise HTTPException(status_code=503, detail="Memory service unavailable")
-    items = memory_service.list_memories(user_id=user_id)
+    items = pahf_memory_service.get_all_memories(person_id=user_id)
     return [_memory_to_response(item) for item in items]
 
 
 @app.get("/api/v1/memory/{memory_id}", response_model=MemoryResponse)
-async def get_memory(memory_id: str):
-    if memory_service is None:
+async def get_memory(memory_id: int, user_id: str):
+    if pahf_memory_service is None:
         raise HTTPException(status_code=503, detail="Memory service unavailable")
-    item = memory_service.get_memory(memory_id=memory_id)
+    item = pahf_memory_service.get_memory(person_id=user_id, memory_id=memory_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return _memory_to_response(item)
 
 
 @app.put("/api/v1/memory/{memory_id}", response_model=MemoryResponse)
-async def update_memory(memory_id: str, request: MemoryUpdateRequest):
-    if memory_service is None:
+async def update_memory(memory_id: int, request: MemoryUpdateRequest):
+    if pahf_memory_service is None:
         raise HTTPException(status_code=503, detail="Memory service unavailable")
-    item = memory_service.update_memory(
+    item = pahf_memory_service.update_memory(
+        person_id=request.user_id,
         memory_id=memory_id,
-        text=request.text,
-        tags=request.tags,
-        metadata=request.metadata,
+        new_text=request.text,
     )
     if item is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return _memory_to_response(item)
 
 
-@app.delete("/api/v1/memory/{memory_id}")
-async def delete_memory(memory_id: str):
-    if memory_service is None:
-        raise HTTPException(status_code=503, detail="Memory service unavailable")
-    deleted = memory_service.delete_memory(memory_id=memory_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Memory not found")
-    return {"status": "success", "message": f"Memory {memory_id} deleted"}
-
-
 @app.post("/api/v1/memory/search", response_model=MemorySearchResponse)
 async def search_memory(request: MemorySearchRequest):
-    if memory_service is None:
+    if pahf_memory_service is None:
         raise HTTPException(status_code=503, detail="Memory service unavailable")
-    top_k = request.top_k or app_config.MEMORY_SEARCH_TOP_K
-    hits = memory_service.search_memories(
-        user_id=request.user_id,
+    hits = pahf_memory_service.search(
+        person_id=request.user_id,
         query=request.query,
-        top_k=top_k,
+        top_k=request.top_k,
     )
     return MemorySearchResponse(
         hits=[
@@ -611,6 +591,20 @@ async def search_memory(request: MemorySearchRequest):
             for hit in hits
         ]
     )
+
+
+@app.post("/api/v1/memory/find-similar", response_model=Optional[MemoryResponse])
+async def find_similar_memory(request: MemoryFindSimilarRequest):
+    if pahf_memory_service is None:
+        raise HTTPException(status_code=503, detail="Memory service unavailable")
+    item = pahf_memory_service.find_similar_memory(
+        person_id=request.user_id,
+        text=request.text,
+        threshold=request.threshold,
+    )
+    if item is None:
+        return None
+    return _memory_to_response(item)
 
 
 @app.delete("/api/v1/session/{user_id}")

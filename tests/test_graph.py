@@ -1,118 +1,144 @@
-"""
-Tests for the LangGraph chat flow.
-"""
+"""Tests for PAHF-based LangGraph flow."""
 
-import pytest
+from __future__ import annotations
+
+from pathlib import Path
+import shutil
+import tempfile
 from unittest.mock import Mock
-from backend.agents.graph import create_chat_graph, ChatState
+
+from backend.agents.graph import create_chat_graph
+from backend.pahf_memory.service import PAHFMemoryService
 
 
-@pytest.fixture
-def mock_model_client():
-    """Create a mock model client."""
-    client = Mock()
-    client.chat = Mock(return_value="Test response from model")
-    return client
+class FakeEmbedding:
+    """Deterministic embedding stub compatible with PAHF MemoryBank API."""
+
+    @staticmethod
+    def _vector(text: str) -> list[float]:
+        text = (text or "").lower()
+        return [
+            float("shoe" in text),
+            float("size" in text),
+            float("name" in text),
+            float("xiaohao" in text),
+            float("30" in text),
+            float("31" in text),
+        ]
+
+    def embed_documents(self, texts):
+        return [self._vector(t) for t in texts]
+
+    def embed_query(self, text):
+        return self._vector(text)
 
 
-def test_create_chat_graph(mock_model_client):
-    """Test that chat graph is created successfully."""
-    graph = create_chat_graph(mock_model_client)
-    assert graph is not None
+class FakeLLM:
+    """Prompt-driven stub for PAHF pre-clarification and extraction loops."""
+
+    def generate(self, prompt: str, temperature: float = 0.0, max_tokens: int = 256) -> str:
+        if "Decision: ASK or PROCEED" in prompt:
+            return "Decision: PROCEED\nQuestion:"
+
+        if "Store: YES or NO" in prompt:
+            lower = prompt.lower()
+            if "actually my shoe size is 31" in lower:
+                return "Store: YES\nSummary: Xiaohao shoe size is 31."
+            if "my name is xiaohao and my shoe size is 30" in lower:
+                return "Store: YES\nSummary: Xiaohao shoe size is 30."
+            return "Store: NO\nSummary:"
+
+        if "Are these two memories about the same user-preference topic/domain?" in prompt:
+            return "Yes"
+
+        if "Please create a concise, integrated summary" in prompt:
+            marker = "New information:"
+            if marker in prompt:
+                return prompt.split(marker, 1)[1].strip().splitlines()[0]
+            return "Merged memory."
+
+        return "No"
 
 
-def test_graph_invoke(mock_model_client):
-    """Test invoking the chat graph."""
-    graph = create_chat_graph(mock_model_client)
-    
-    initial_state = {
-        "user_id": "test_user",
-        "user_message": "Hello",
-        "response": None,
-        "session": None,
-        "temperature": None,
-        "max_tokens": None,
-    }
-    
-    result = graph.invoke(initial_state)
-    
-    assert result["user_id"] == "test_user"
-    assert result["user_message"] == "Hello"
-    assert result["response"] == "Test response from model"
-    
-    # Verify model client was called
-    mock_model_client.chat.assert_called_once_with(
-        user_id="test_user",
-        message="Hello",
-        temperature=None,
-        max_tokens=None,
-        use_history=False,
+def _tmp_dir(prefix: str) -> Path:
+    return Path(tempfile.mkdtemp(prefix=f"{prefix}_"))
+
+
+def build_service(tmp_dir: Path) -> PAHFMemoryService:
+    return PAHFMemoryService(
+        backend="sqlite",
+        sqlite_db_path=str(tmp_dir / "pahf.db"),
+        faiss_path=str(tmp_dir / "pahf_index"),
+        top_k=5,
+        similarity_threshold=0.2,
+        llm_client=FakeLLM(),
+        query_encoder="unused-query",
+        context_encoder="unused-context",
+        device=None,
+        enable_pre_clarification=True,
+        enable_post_correction=True,
+        embedding_model=FakeEmbedding(),
     )
 
 
-def test_graph_executes_memory_write_after_model():
-    mock_model = Mock()
-    mock_model.chat = Mock(return_value="Assistant reply")
+def test_graph_executes_pahf_memory_flow():
+    tmp_dir = _tmp_dir("graph_pahf")
+    try:
+        mock_model = Mock()
+        mock_model.chat = Mock(return_value="Assistant reply")
+        service = build_service(tmp_dir)
 
-    mock_memory = Mock()
-    mock_memory.search_memories = Mock(return_value=[])
-    mock_memory.extract_and_store = Mock(return_value=Mock(id="mem_123"))
+        graph = create_chat_graph(
+            model_client=mock_model,
+            pahf_memory_service=service,
+            tool_planner=None,
+            tool_executor=None,
+            tool_registry=None,
+            prompt_builder=None,
+            tools_enabled=False,
+        )
 
-    graph = create_chat_graph(
-        model_client=mock_model,
-        short_term_manager=None,
-        memory_service=mock_memory,
-        memory_enabled=True,
-        memory_write_enabled=True,
-        memory_top_k=3,
-    )
+        first = graph.invoke(
+            {
+                "user_id": "u1",
+                "user_message": "My name is Xiaohao and my shoe size is 30.",
+                "response": None,
+                "temperature": None,
+                "max_tokens": None,
+                "session": None,
+            }
+        )
+        assert first["memory_update"]["updated"] is True
+        assert first["memory_update"]["action"] == "added"
 
-    result = graph.invoke(
-        {
-            "user_id": "u1",
-            "user_message": "My name is Xiaohao",
-            "response": None,
-            "session": None,
-            "temperature": None,
-            "max_tokens": None,
-        }
-    )
+        second = graph.invoke(
+            {
+                "user_id": "u1",
+                "user_message": "What is my shoe size?",
+                "response": None,
+                "temperature": None,
+                "max_tokens": None,
+                "session": None,
+            }
+        )
+        assert second["retrieved_memories"]
+        assert "shoe size is 30" in second["retrieved_memories"][0]["text"].lower()
 
-    assert result["response"] == "Assistant reply"
-    assert result["auto_memory"] == "mem_123"
-    mock_memory.extract_and_store.assert_called_once_with(
-        user_id="u1",
-        user_message="My name is Xiaohao",
-    )
+        third = graph.invoke(
+            {
+                "user_id": "u1",
+                "user_message": "Actually my shoe size is 31.",
+                "response": None,
+                "temperature": None,
+                "max_tokens": None,
+                "session": None,
+            }
+        )
+        assert third["memory_update"]["updated"] is True
+        assert third["memory_update"]["action"] == "updated"
 
-
-def test_graph_skips_memory_write_when_disabled():
-    mock_model = Mock()
-    mock_model.chat = Mock(return_value="Assistant reply")
-
-    mock_memory = Mock()
-    mock_memory.search_memories = Mock(return_value=[])
-    mock_memory.extract_and_store = Mock(return_value=Mock(id="mem_123"))
-
-    graph = create_chat_graph(
-        model_client=mock_model,
-        short_term_manager=None,
-        memory_service=mock_memory,
-        memory_enabled=True,
-        memory_write_enabled=False,
-        memory_top_k=3,
-    )
-
-    result = graph.invoke(
-        {
-            "user_id": "u2",
-            "user_message": "My shoe size is 30",
-            "response": None,
-            "session": None,
-            "temperature": None,
-            "max_tokens": None,
-        }
-    )
-
-    assert result["auto_memory"] is None
-    mock_memory.extract_and_store.assert_not_called()
+        memories = service.get_all_memories("u1")
+        assert len(memories) == 1
+        assert "31" in memories[0].text
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
